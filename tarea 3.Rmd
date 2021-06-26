@@ -1,0 +1,180 @@
+---
+title: "Análisis de deportes de resistencia"
+output: github_document
+---
+Cargamos librerias y los datos 
+```{r}
+library(plyr)
+library(ggplot2)
+library(tidyverse)
+library(tidymodels)
+library(discrim)
+library(caret)
+library(pROC)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(e1071)
+library(class)
+library(naivebayes)
+library(psych)
+
+bici3<-read_rds("/Users/gabrielengel/Downloads/endurance.rds")
+```
+
+**Limpieza de datos**.
+
+Lo primero que se necesita hacer al inspeccionar los datos es encontrar la variable decisiva para el análisis. Como se pide diferenciar las actividades realizadas en bicicletas o a pie, se usa la variable *type*. Las agrupamos y creamos los dos tipos de *type*, y para poder correr los modelos, denominamos las actividades realizadas en bicicleta con un 0 y los que se realizan a pie con un 1. 
+````{r}
+str(bici3)
+head(bici3)
+summary(bici3)
+
+type <- bici3$type
+
+table(type)
+
+#0 --> bici
+#1 --> a pie
+bici3$type[bici3$type=="EBikeRide"] <- "0"
+bici3$type[bici3$type=="Ride"] <- "0"
+bici3$type[bici3$type=="Hike"] <- "1"
+bici3$type[bici3$type=="Run"] <- "1"
+bici3$type[bici3$type=="Walk"] <- "1"
+`````
+
+Ahora se decide qué variables tomar en consideración al correr los modelos. Se eligen todas las variables que podrían ser importantes al momento de decidir qué tipo de usuario es, tales como: calorías quemadas, distancia, velocidad máxima y velocidad promedio dentro de los que podrían tener más peso. Antes de separar las variables, primero se limpian los datos para omitir los datos que faltan.
+````{r}
+bici3 %>% 
+  summarise_all(funs(sum(is.na(.))))
+
+bici3 <- bici3 %>% filter(!(is.na(elev_low))) %>% filter(!(is.na(elev_high))) %>% filter(!(is.na(device_name)))
+
+bici3 %>% 
+  summarise_all(funs(sum(is.na(.))))
+
+table(bici3$type)
+
+
+bici3 <- bici3[,c(2, 4:6, 8:9, 11:13, 16)]
+str(bici3)
+
+bici3$elev_low<- as.numeric(bici3$elev_low)
+bici3$elev_high<- as.numeric(bici3$elev_high)
+bici3$max_speed<- as.numeric(bici3$max_speed)
+bici3$average_speed<- as.numeric(bici3$average_speed)
+
+str(bici3)
+
+`````
+
+**Separación de datos - Training y Test**
+
+````{r}
+set.seed(123)
+data_split3 <- initial_split(bici3, prop = 0.8)
+train_data3 <- training(data_split3) 
+test_data3 <- testing(data_split3)
+`````
+
+**Arbol de decisión**
+
+Creamos el arbol de decisión usando los datos de training
+
+````{r}
+m1<- rpart(type ~ ., data = train_data3, method = "class")
+m1
+
+rpart.plot(m1, type = 3, digits = 3, fallen.leaves = TRUE)
+`````
+
+Para predecir el tipo de usuario, se usan los datos de testing
+
+````{r}
+pred_type3 <- predict(m1, newdata = test_data3, type = "class")
+pred_type3 %>% as.data.frame() %>% head()
+
+pred_type3 %>% as.data.frame() %>% tail()
+
+
+test_data3$predictedtype <- pred_type3
+
+pred_incom_roc <- predict(m1, newdata = test_data3, type = "prob")
+pred_incom_roc %>% as.data.frame() %>% head()
+
+pred_incom_roc %>% as.data.frame() %>% tail()
+
+pred_incom_roc <- pred_incom_roc %>% as.data.frame()
+prob <- pred_incom_roc$"1"
+
+cm <- confusionMatrix(table(test_data3$type, test_data3$predictedtype))
+test_data3$predictedtype <- as.factor(test_data3$predictedtype)
+
+
+
+print(cm)
+````
+Al analizar el modelo, podemos ver que el accuracy del modelo es de 0,94. El "sensitivity"(0) es de 0,9456 mientras que el "specificity"(1) es de 0,9290, lo que nos dice que el modelo se equivoca con casi la misma probabilidad en ambos casos. 
+
+
+
+**Regrsión Logística**
+
+Primero transformamos todas las variables a numéricas, y luego creamos el modelo usando los datos de training
+````{r}
+str(train_data3)
+train_data3$type<- as.numeric(train_data3$type)
+rl<- glm(formula = type ~ .,data =  train_data3, family = "binomial" )
+`````
+
+Ahora hacemos el predict con los datos de testing. Ya que las predicciones que hace el modelo serán decimales entre 0-1, le tenemos que decir que haga un "round" para que cualquier número igual o mayor a 0,5 se cambie a 1 y los que sean menor a 0,5 a 0.
+
+
+````{r}
+p2<- predict(rl, newdata = test_data3, type = "response")
+p_bici<- round(p2)
+
+str(train_data3)
+test_data3$type<- as.factor(test_data3$type)
+
+length(p_bici)
+length(test_data3$type)
+
+p_bici<- as.factor(p_bici)
+confusionMatrix(test_data3$type, p_bici)
+`````
+El accuracy del modelo es de 0,9094. El "sensitivity" y "specificity" es de 0,9369 y 0,8594 respectivamente.
+
+
+
+**Naive Bayes**
+
+Creamos el modelo de naive bayes con los datos training. Luego generamos las predicciones con los datos de testing. 
+````{r}
+train_data3$type<- as.factor(train_data3$type)
+model_nb<- naive_bayes(type  ~  ., train_data3)
+model_nb
+
+
+
+     
+conf_nb<- predict(model_nb, test_data3)
+
+     
+
+
+confusionMatrix(test_data3$type, conf_nb)
+`````
+El accuracy de este modelo es de 0,6756, lejos el peor de todos los modelos. Su "sensitivity" y "specificity" son de 0,9599 y 0,5170 respectivamente. 
+
+
+
+**Comparación de modelos**
+
+En este caso, el valor que debemos tomar en consideración es el accuracy. El sensitivity y sensibility no son tan importantes para este caso ya que al determinar erróneamente a un atleta que va a pie o en bici no es de grave importancia como sería en otros casos. Un ejemplo donde sería al revés son los tests PCR de Covid-19. En este caso, es importante saber específicamente en qué tipo de error está cometiendo el sistema. Es mucho más grave determinar a un paciente enfermo como sano que a uno sano como enfermo, ya que el paciente enfermo se expone a otra gente que podría contagiar, mientras que para un paciente sano con PCR positivo, lo peor que le podría pasar es tener que hacer una cuarentena de dos semanas. 
+
+El modelo que tiene mejor accuracy sería el de árbol de decisión(CART) al tener 0,940.
+
+
+
+Para identificar a aquellos actividades que fueron registradas erróneamente revisamos la matriz de confusión del modelo, lo cual nos dice que existen 1497 actividades realizadas a pie que fueron ingresados como actividades en bicicleta, mientras que existen 690 ciclistas que fueron registrados como actividades a pie.
